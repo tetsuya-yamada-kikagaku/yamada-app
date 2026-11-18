@@ -49,16 +49,30 @@ class SentenceBertJapanese:
 
 #モデルの指定
 MODEL_NAME = "sonoisa/sentence-bert-base-ja-mean-tokens-v2"  # <- v2です。
-model = SentenceBertJapanese(MODEL_NAME)
+
+
+# 画面を操作するたびに読み直さないよう、モデルは 1 回だけ読み込んで使い回す
+@st.cache_resource
+def load_model():
+    return SentenceBertJapanese(MODEL_NAME)
+
+
+model = load_model()
 
 ##ここまでモデル----------
-# df読み込み
-df = pd.read_csv('m2022.csv', header=0)
 
-# vec読み込み
-with open('m2022.json', 'r') as f:
-    loaded_vecs_json = json.load(f)
-    loaded_vecs = np.array(loaded_vecs_json)  # NumPy配列に変換
+
+# データも 1 回だけ読み込む
+@st.cache_data
+def load_data():
+    df = pd.read_csv('m2022.csv', header=0)
+    with open('m2022.json', 'r') as f:
+        loaded_vecs = np.array(json.load(f))  # NumPy配列に変換
+    df_ans = pd.read_csv('m2022_ans.csv', header=0)
+    return df, loaded_vecs, df_ans
+
+
+df, loaded_vecs, df_ans = load_data()
 
 ##ここまで読み込み----------
 
@@ -81,6 +95,10 @@ selected_subtitle = st.selectbox('問題番号', unique_subtitles)
 # 選択されたカテゴリ、年度、番号に基づいてデータフレームをフィルタリング
 filtered_df = df[(df['Year'] == selected_year) & (df['Category'] == selected_category) & (df['Subtitle'] == selected_subtitle)]
 
+if filtered_df.empty:
+    st.warning('この組み合わせの問題はありません。カテゴリ・年度・問題番号を選び直してください。')
+    st.stop()
+
 # Title列を除外して表示
 if 'Title' in filtered_df.columns:
     filtered_df_tno = filtered_df.drop(columns=['Title'])
@@ -89,8 +107,8 @@ if 'Title' in filtered_df.columns:
 # バッチサイズを設定
 batch_size = 100
 
-# mondai_vecsの準備
-mondai_vecs = torch.tensor(loaded_vecs[filtered_df.index])
+# mondai_vecsの準備（選んだ問題 1 問のベクトル）
+mondai_vecs = torch.tensor(loaded_vecs[filtered_df.index[:1]])
 
 # バッチごとのコサイン類似度を保存するためのリスト
 similarity_scores = []
@@ -99,10 +117,10 @@ similarity_scores = []
 for i in range(0, len(loaded_vecs), batch_size):
     # バッチを作成
     batch = torch.tensor(loaded_vecs[i : i + batch_size])
-    
+
     # バッチとmondai_vecsのコサイン類似度を計算
     sim = F.cosine_similarity(mondai_vecs, batch)
-    
+
     # スコアを保存
     similarity_scores.append(sim.tolist())
 
@@ -110,9 +128,9 @@ for i in range(0, len(loaded_vecs), batch_size):
 similarity_scores = [score for sublist in similarity_scores for score in sublist]
 
 df_results = pd.DataFrame(
-    
+
  {
-    '類似度': sim,
+    '類似度': similarity_scores,
     'カテゴリ': df['Category'],
     '年度': df['Year'].astype(str) + "年",
     '番号': df['Subtitle'],
@@ -161,16 +179,14 @@ st.markdown("---")
 
 
 
-df_ans = pd.read_csv('m2022_ans.csv', header=0)
-
 df_results_ans = pd.DataFrame(
     {
-        '類似度': sim,
+        '類似度': similarity_scores,
         'カテゴリ': df_ans['Category'],
         '年度': df_ans['Year'].astype(str) + "年",
         '番号': df_ans['Subtitle'],
         '問題文': df_ans['Questions'],
-        'Answer': df_ans['Answer'], 
+        'Answer': df_ans['Answer'],
     }
 )
 
@@ -191,7 +207,7 @@ option_dict = {"選択肢1": "1", "選択肢2": "2", "選択肢3": "3", "選択�
 selected_option_value = option_dict[option]
 
 # 選択された選択肢とdf['Answer']の値を比較
-if selected_option_value == df_results_ans['Answer'].iloc[1]:
+if selected_option_value == str(df_results_ans['Answer'].iloc[1]):
     result = "正解"
 else:
     result = "不正解"
@@ -253,14 +269,14 @@ if st.button("保存"):
 
     if os.path.isfile('user_input.csv'):
         # 既存のデータを読み込み
-        df = pd.read_csv('user_input.csv')
-        # 新規データを追加
-        df = df.append(new_data, ignore_index=True)
+        saved_df = pd.read_csv('user_input.csv')
+        # 新規データを追加（pandas 2.x では append が使えないので concat）
+        saved_df = pd.concat([saved_df, new_data], ignore_index=True)
     else:
-        df = new_data
+        saved_df = new_data
 
     # DataFrameをCSVファイルに保存
-    df.to_csv('user_input.csv', index=False)
+    saved_df.to_csv('user_input.csv', index=False)
     st.success("テキストが保存されました。")
 
 # 画面下部にある「上に戻る」ボタン
@@ -274,8 +290,8 @@ search_username = st.text_input("表示するユーザー名を入力してく�
 
 if st.button("検索"):
     if os.path.isfile('user_input.csv'):
-        df = pd.read_csv('user_input.csv')
-        df = df[df['ユーザー名'] == search_username]  # ユーザー名が一致する行だけを選択
-        st.write(df)  # DataFrameを表示
+        saved_df = pd.read_csv('user_input.csv')
+        saved_df = saved_df[saved_df['ユーザー名'] == search_username]  # ユーザー名が一致する行だけを選択
+        st.write(saved_df)  # DataFrameを表示
     else:
         st.error("まだデータがありません。")
