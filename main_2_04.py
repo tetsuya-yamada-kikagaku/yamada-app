@@ -147,7 +147,7 @@ st.dataframe(df_results.head(10))
 
 # 区切り線を表示
 st.markdown("---")
-st.markdown("## 一番似ている問題です。解いてくだちぃ")
+st.markdown("## 一番似ている問題です。解いてください")
 # st.dataframe(df_results.iloc[1])
 
 
